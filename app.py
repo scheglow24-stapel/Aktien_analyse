@@ -3,6 +3,7 @@ import yfinance as yf
 import pandas as pd
 import pandas_ta as ta
 import numpy as np
+import plotly.graph_objects as go
 
 # --- KONFIGURATION ---
 RISIKO_SCHWELLE = 0.02
@@ -39,7 +40,7 @@ def lade_und_bereche_indikatoren(ticker_symbol: str) -> dict:
             "bb_upper": float(daten["BBU_20_2.0"].iloc[-1]),
             "volatilitaet": volatilitaet,
             "momentum": momentum,
-            "historie": daten # Wichtig: Wir geben die ganzen Daten für das Chart mit zurück
+            "historie": daten # Wichtig für die Charts
         }
     except Exception as e:
         return {"fehler": f"Fehler bei {ticker_symbol}: {e}"}
@@ -85,7 +86,7 @@ def berechne_gewichtet_score(d: dict) -> dict:
         "Wahrscheinlichkeit (%)": round(wkt * 100, 1),
         "Score": round(score, 3),
         "Technik": round(s_tech, 2), "Sentiment": round(s_sent, 2), "Risiko": round(s_risk, 2),
-        "Historie": d["historie"] # Historie für die Charts durchreichen
+        "Historie": d["historie"]
     }
 
 # --- UI ---
@@ -106,7 +107,7 @@ if st.button("Analysieren", type="primary"):
                 ergebnisse.append(berechne_gewichtet_score(d))
             
             if ergebnisse:
-                # Tabelle (ohne die Historie-Spalte anzuzeigen)
+                # 1. Die Übersichtstabelle
                 df = pd.DataFrame([{k:v for k,v in e.items() if k != "Historie"} for e in ergebnisse])
                 df = df.sort_values("Wahrscheinlichkeit (%)", ascending=False)
                 st.dataframe(df, use_container_width=True, hide_index=True)
@@ -114,7 +115,7 @@ if st.button("Analysieren", type="primary"):
                 st.divider()
                 st.subheader("📊 Technische Charts")
 
-                # Charts für jeden Ticker generieren
+                # 2. Die interaktiven Plotly Charts
                 for e in ergebnisse:
                     with st.expander(f"{e['Ticker']} – Chart anzeigen ({e['Richtung']} | {e['Wahrscheinlichkeit (%)']}%)"):
                         daten = e["Historie"]
@@ -123,20 +124,33 @@ if st.button("Analysieren", type="primary"):
                         daten["SMA_20"] = daten["Close"].rolling(window=20).mean()
                         daten["SMA_50"] = daten["Close"].rolling(window=50).mean()
                         
-                        # Streamlit Candlestick Chart
-                        st.candle_chart(
-                            daten,
-                            x="Date",
-                            open="Open",
-                            high="High",
-                            low="Low",
-                            close="Close",
-                            volume="Volume",
+                        # Plotly Candlestick Chart erstellen
+                        fig = go.Figure()
+                        
+                        # Kerzen
+                        fig.add_trace(go.Candlestick(
+                            x=daten.index,
+                            open=daten["Open"], high=daten["High"],
+                            low=daten["Low"], close=daten["Close"],
+                            name="Kerzen"
+                        ))
+                        
+                        # Gleitende Durchschnitte als Linien hinzufügen
+                        fig.add_trace(go.Scatter(x=daten.index, y=daten["SMA_20"], name="SMA 20", line=dict(color='orange')))
+                        fig.add_trace(go.Scatter(x=daten.index, y=daten["SMA_50"], name="SMA 50", line=dict(color='blue')))
+                        
+                        # Layout anpassen (Rangeslider aus, damit es auf dem Handy besser aussieht)
+                        fig.update_layout(
                             title=f"{e['Ticker']} Kerzenchart",
-                            use_container_width=True
+                            xaxis_rangeslider_visible=False,
+                            height=450,
+                            margin=dict(l=20, r=20, t=40, b=20)
                         )
                         
-                        # Zusatzinfo: Aktuelle RSI- und MACD-Werte
+                        # Chart in Streamlit anzeigen
+                        st.plotly_chart(fig, use_container_width=True)
+                        
+                        # Zusatzinfo: Aktuelle Werte als Kacheln
                         col1, col2, col3 = st.columns(3)
                         col1.metric("Aktueller Kurs", f"${e['Historie']['Close'].iloc[-1]:.2f}")
                         col2.metric("RSI (14)", f"{e['Technik']:.2f}")
