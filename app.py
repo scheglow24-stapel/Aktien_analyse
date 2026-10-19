@@ -39,6 +39,7 @@ def lade_und_bereche_indikatoren(ticker_symbol: str) -> dict:
             "bb_upper": float(daten["BBU_20_2.0"].iloc[-1]),
             "volatilitaet": volatilitaet,
             "momentum": momentum,
+            "historie": daten # Wichtig: Wir geben die ganzen Daten für das Chart mit zurück
         }
     except Exception as e:
         return {"fehler": f"Fehler bei {ticker_symbol}: {e}"}
@@ -84,6 +85,7 @@ def berechne_gewichtet_score(d: dict) -> dict:
         "Wahrscheinlichkeit (%)": round(wkt * 100, 1),
         "Score": round(score, 3),
         "Technik": round(s_tech, 2), "Sentiment": round(s_sent, 2), "Risiko": round(s_risk, 2),
+        "Historie": d["historie"] # Historie für die Charts durchreichen
     }
 
 # --- UI ---
@@ -102,10 +104,40 @@ if st.button("Analysieren", type="primary"):
                     st.error(d["fehler"])
                     continue
                 ergebnisse.append(berechne_gewichtet_score(d))
+            
             if ergebnisse:
-                df = pd.DataFrame(ergebnisse).sort_values("Wahrscheinlichkeit (%)", ascending=False)
+                # Tabelle (ohne die Historie-Spalte anzuzeigen)
+                df = pd.DataFrame([{k:v for k,v in e.items() if k != "Historie"} for e in ergebnisse])
+                df = df.sort_values("Wahrscheinlichkeit (%)", ascending=False)
                 st.dataframe(df, use_container_width=True, hide_index=True)
+                
+                st.divider()
+                st.subheader("📊 Technische Charts")
+
+                # Charts für jeden Ticker generieren
                 for e in ergebnisse:
-                    with st.expander(f"{e['Ticker']} – {e['Richtung']} ({e['Wahrscheinlichkeit (%)']}%)"):
-                        st.write(f"**Score:** {e['Score']}")
-                        st.write(f"**Technik:** {e['Technik']} · **Sentiment:** {e['Sentiment']} · **Risiko:** {e['Risiko']}")
+                    with st.expander(f"{e['Ticker']} – Chart anzeigen ({e['Richtung']} | {e['Wahrscheinlichkeit (%)']}%)"):
+                        daten = e["Historie"]
+                        
+                        # Gleitende Durchschnitte berechnen (SMA 20 und 50)
+                        daten["SMA_20"] = daten["Close"].rolling(window=20).mean()
+                        daten["SMA_50"] = daten["Close"].rolling(window=50).mean()
+                        
+                        # Streamlit Candlestick Chart
+                        st.candle_chart(
+                            daten,
+                            x="Date",
+                            open="Open",
+                            high="High",
+                            low="Low",
+                            close="Close",
+                            volume="Volume",
+                            title=f"{e['Ticker']} Kerzenchart",
+                            use_container_width=True
+                        )
+                        
+                        # Zusatzinfo: Aktuelle RSI- und MACD-Werte
+                        col1, col2, col3 = st.columns(3)
+                        col1.metric("Aktueller Kurs", f"${e['Historie']['Close'].iloc[-1]:.2f}")
+                        col2.metric("RSI (14)", f"{e['Technik']:.2f}")
+                        col3.metric("Sentiment (5T)", f"{e['Sentiment']:.2f}")
