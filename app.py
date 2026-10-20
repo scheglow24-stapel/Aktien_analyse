@@ -19,6 +19,7 @@ SMA200_COLOR = "#e91e63"
 
 st.set_page_config(page_title="TV Clone", page_icon="📈", layout="wide")
 
+# Custom CSS für den absoluten TradingView-Look
 st.markdown(f"""
     <style>
     .stApp {{ background-color: {BG_COLOR}; color: {TEXT_COLOR}; }}
@@ -33,6 +34,7 @@ st.markdown(f"""
     </style>
 """, unsafe_allow_html=True)
 
+# --- DATEN FUNKTIONEN ---
 @st.cache_data(ttl=3600)
 def suche_weltweit(query_text: str):
     if not query_text or len(query_text) < 2: 
@@ -63,9 +65,12 @@ def lade_daten(ticker_symbol: str):
     except Exception as e:
         return {"fehler": str(e)}
 
+# --- SIDEBAR UI ---
 with st.sidebar:
     st.markdown(f"<h2 style='color:{TEXT_COLOR}'>🌍 Watchlist</h2>", unsafe_allow_html=True)
     suchbegriff = st.text_input("Suchen (z.B. AAPL, SAP, Alibaba)", "")
+    
+    ausgewaehlter_ticker = None
     
     if suchbegriff:
         ergebnisse = suche_weltweit(suchbegriff)
@@ -73,13 +78,13 @@ with st.sidebar:
             auswahl = st.selectbox("Ergebnisse:", ergebnisse["Ticker"].tolist(), format_func=lambda x: f"{ergebnisse[ergebnisse['Ticker']==x]['Name'].values[0]} ({x})")
             ausgewaehlter_ticker = auswahl
         else:
-st.info("Nichts gefunden.")
-            ausgewaehlter_ticker = None
+            st.info("Nichts gefunden.")
     else:
         standard = {"AAPL": "Apple (US)", "MSFT": "Microsoft (US)", "NVDA": "NVIDIA (US)", "SAP.DE": "SAP (DE)", "BABA": "Alibaba (CN)"}
         auswahl = st.selectbox("Beliebte Aktien:", list(standard.keys()), format_func=lambda x: standard[x])
         ausgewaehlter_ticker = auswahl
 
+# --- HAUPTBEREICH ---
 if ausgewaehlter_ticker:
     data = lade_daten(ausgewaehlter_ticker)
     
@@ -88,6 +93,7 @@ if ausgewaehlter_ticker:
     else:
         df = data["historie"]
         
+        # Kopfbereich (TradingView Toolbar)
         aktueller_kurs = df["Close"].iloc[-1]
         vorheriger_kurs = df["Close"].iloc[-2]
         kurs_aenderung = aktueller_kurs - vorheriger_kurs
@@ -106,27 +112,33 @@ if ausgewaehlter_ticker:
             </div>
         """, unsafe_allow_html=True)
 
+        # Chart Bauen
         fig = make_subplots(rows=3, cols=1, shared_xaxes=True, 
                             vertical_spacing=0.03, 
                             row_heights=[0.65, 0.15, 0.20])
 
+        # 1. Kerzen
         fig.add_trace(go.Candlestick(
             x=df.index, open=df["Open"], high=df["High"],
             low=df["Low"], close=df["Close"], name="Preis",
             increasing_line_color=UP_COLOR, decreasing_line_color=DOWN_COLOR
         ), row=1, col=1)
 
+        # Gleitende Durchschnitte
         fig.add_trace(go.Scatter(x=df.index, y=df["SMA_20"], name="SMA 20", line=dict(color=SMA20_COLOR, width=1.5)), row=1, col=1)
         fig.add_trace(go.Scatter(x=df.index, y=df["SMA_50"], name="SMA 50", line=dict(color=SMA50_COLOR, width=1.5)), row=1, col=1)
         fig.add_trace(go.Scatter(x=df.index, y=df["SMA_200"], name="SMA 200", line=dict(color=SMA200_COLOR, width=1.5)), row=1, col=1)
 
+        # 2. Volumen
         colors = [UP_COLOR if close >= open else DOWN_COLOR for close, open in zip(df['Close'], df['Open'])]
         fig.add_trace(go.Bar(x=df.index, y=df["Volume"], marker_color=colors, name="Volumen"), row=2, col=1)
 
+        # 3. RSI
         fig.add_trace(go.Scatter(x=df.index, y=df["RSI_14"], name="RSI", line=dict(color='#b2b5be', width=1.5)), row=3, col=1)
         fig.add_hline(y=70, line_dash="dash", line_color=DOWN_COLOR, row=3, col=1)
         fig.add_hline(y=30, line_dash="dash", line_color=UP_COLOR, row=3, col=1)
 
+        # Layout
         fig.update_layout(
             template="plotly_dark",
             paper_bgcolor=BG_COLOR,
@@ -138,10 +150,12 @@ if ausgewaehlter_ticker:
             hovermode="x unified"
         )
 
+        # Achsen
         fig.update_xaxes(showgrid=True, gridcolor=GRID_COLOR, gridwidth=1, zeroline=False)
         fig.update_yaxes(showgrid=True, gridcolor=GRID_COLOR, gridwidth=1, zeroline=False)
         fig.update_yaxes(title_text="", side="right", row=1, col=1)
         fig.update_yaxes(title_text="", side="right", row=2, col=1)
         fig.update_yaxes(title_text="RSI", side="right", row=3, col=1)
 
+        # Anzeigen
         st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
