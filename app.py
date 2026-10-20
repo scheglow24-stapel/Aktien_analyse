@@ -4,154 +4,151 @@ import pandas as pd
 import pandas_ta as ta
 import numpy as np
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from yfinance import Search
 
-# --- KONFIGURATION ---
+# --- KONFIGURATION & TRADINGVIEW-FARBEN ---
 RISIKO_SCHWELLE = 0.02
 GEWICHTE = {"Technik": 0.45, "Sentiment": 0.25, "Risiko": 0.30}
 
-st.set_page_config(page_title="Aktien-Analyse", page_icon="📈", layout="centered")
-st.title("📈 Aktien-Analyse")
-st.caption("Technik · Sentiment · Risiko – gewichtet und kalibriert")
+# TradingView Farbpalette
+BG_COLOR = "#131722"      # Sehr dunkles Blau/Grau
+GRID_COLOR = "#2a2e39"    # Etwas helleres Grau für das Raster
+TEXT_COLOR = "#d1d4dc"    # Helles Grau für Text
+UP_COLOR = "#089981"      # TradingView Grün
+DOWN_COLOR = "#f23645"    # TradingView Rot
+SMA20_COLOR = "#f5c142"   # Gelb/Orange
+SMA50_COLOR = "#2962ff"   # Blau
+SMA200_COLOR = "#e91e63"  # Pink
 
-@st.cache_data(ttl=300)
-def lade_und_bereche_indikatoren(ticker_symbol: str) -> dict:
+st.set_page_config(page_title="TV Clone", page_icon="📈", layout="wide")
+
+# Custom CSS für den absoluten TradingView-Look
+st.markdown(f"""
+    <style>
+    .stApp {{ background-color: {BG_COLOR}; color: {TEXT_COLOR}; }}
+    .stSidebar {{ background-color: #1e222d; border-right: 1px solid {GRID_COLOR}; }}
+    h1, h2, h3 {{ color: {TEXT_COLOR} !important; font-family: 'Roboto', sans-serif; }}
+    .stButton>button {{ background-color: #2962ff; color: white; border-radius: 4px; }}
+    .stTextInput>div>div>input {{ background-color: #1e222d; color: {TEXT_COLOR}; border: 1px solid {GRID_COLOR}; }}
+    .stSelectbox>div>div>div {{ background-color: #1e222d; color: {TEXT_COLOR}; }}
+    header {{visibility: hidden;}}
+    #MainMenu {{visibility: hidden;}}
+    footer {{visibility: hidden;}}
+    </style>
+""", unsafe_allow_html=True)
+
+# --- SUCHE ---
+@st.cache_data(ttl=3600)
+def suche_weltweit(query_text: str):
+    if not query_text or len(query_text) < 2: return pd.DataFrame()
     try:
-        daten = yf.Ticker(ticker_symbol).history(period="6mo")
-        if daten.empty:
-            return {"fehler": f"Keine Daten für {ticker_symbol}."}
+        search = Search(query_text, max_results=10)
+        quotes = search.quotes
+        if not quotes: return pd.DataFrame()
+        results = [{"Ticker": q.get("symbol"), "Name": q.get("shortname", q.get("longname", "Unbekannt"))} for q in quotes if q.get("quoteType") == "EQUITY"]
+        return pd.DataFrame(results)
+    except Exception: return pd.DataFrame()
+
+# --- DATEN LADEN ---
+@st.cache_data(ttl=300)
+def lade_daten(ticker_symbol: str):
+    try:
+        daten = yf.Ticker(ticker_symbol).history(period="1y")
+        if daten.empty: return {"fehler": "Keine Daten."}
         
         daten.ta.rsi(length=14, append=True)
-        daten.ta.macd(append=True)
-        daten.ta.bbands(length=20, append=True)
-
-        renditen = daten["Close"].pct_change().dropna()
-        volatilitaet = float(renditen.std())
-        kurs_heute = daten["Close"].iloc[-1]
-        kurs_vor5 = daten["Close"].iloc[-6] if len(daten) >= 6 else daten["Close"].iloc[0]
-        momentum = float((kurs_heute - kurs_vor5) / kurs_vor5 * 100)
-
-        return {
-            "ticker": ticker_symbol,
-            "kurs": float(daten["Close"].iloc[-1]),
-            "rsi": float(daten["RSI_14"].iloc[-1]),
-            "macd": float(daten["MACD_12_26_9"].iloc[-1]),
-            "macd_signal": float(daten["MACDs_12_26_9"].iloc[-1]),
-            "bb_lower": float(daten["BBL_20_2.0"].iloc[-1]),
-            "bb_upper": float(daten["BBU_20_2.0"].iloc[-1]),
-            "volatilitaet": volatilitaet,
-            "momentum": momentum,
-            "historie": daten # Wichtig für die Charts
-        }
+        daten["SMA_20"] = daten["Close"].rolling(window=20).mean()
+        daten["SMA_50"] = daten["Close"].rolling(window=50).mean()
+        daten["SMA_200"] = daten["Close"].rolling(window=200).mean()
+        
+        return {"historie": daten, "ticker": ticker_symbol}
     except Exception as e:
-        return {"fehler": f"Fehler bei {ticker_symbol}: {e}"}
-
-def technischer_agent(d: dict) -> float:
-    score = 0.0
-    if d["rsi"] < 30: score += 0.4
-    elif d["rsi"] > 70: score -= 0.4
-    if d["macd"] > d["macd_signal"]: score += 0.3
-    else: score -= 0.3
-    if d["kurs"] <= d["bb_lower"]: score += 0.3
-    elif d["kurs"] >= d["bb_upper"]: score -= 0.3
-    return float(np.clip(score, -1.0, 1.0))
-
-def sentiment_agent(d: dict) -> float:
-    m = d["momentum"]
-    if m > 3: return 1.0
-    if m > 1: return 0.5
-    if m > -1: return 0.0
-    if m > -3: return -0.5
-    return -1.0
-
-def risiko_agent(d: dict) -> float:
-    v = d["volatilitaet"]
-    if v > RISIKO_SCHWELLE * 1.5: return -1.0
-    if v > RISIKO_SCHWELLE: return -0.5
-    return 0.0
-
-def berechne_gewichtet_score(d: dict) -> dict:
-    s_tech, s_sent, s_risk = technischer_agent(d), sentiment_agent(d), risiko_agent(d)
-    score = (GEWICHTE["Technik"] * s_tech + GEWICHTE["Sentiment"] * s_sent + GEWICHTE["Risiko"] * s_risk)
-    
-    std = np.std([s_tech, s_sent, s_risk])
-    uebereinstimmung = max(0.0, 1 - (std / 0.816))
-    konfidenz = 0.5 + (0.95 - 0.5) * uebereinstimmung
-
-    if score > 0.1: richtung, wkt = "BULLISCH", konfidenz
-    elif score < -0.1: richtung, wkt = "BÄRISCH", konfidenz
-    else: richtung, wkt = "NEUTRAL", 0.5
-
-    return {
-        "Ticker": d["ticker"], "Richtung": richtung,
-        "Wahrscheinlichkeit (%)": round(wkt * 100, 1),
-        "Score": round(score, 3),
-        "Technik": round(s_tech, 2), "Sentiment": round(s_sent, 2), "Risiko": round(s_risk, 2),
-        "Historie": d["historie"]
-    }
+        return {"fehler": str(e)}
 
 # --- UI ---
-ticker_eingabe = st.text_input("Ticker (kommagetrennt)", "AAPL, MSFT, NVDA")
-ticker_liste = [t.strip().upper() for t in ticker_eingabe.split(",") if t.strip()]
-
-if st.button("Analysieren", type="primary"):
-    if not ticker_liste:
-        st.warning("Bitte mindestens einen Ticker eingeben.")
+with st.sidebar:
+    st.markdown(f"<h2 style='color:{TEXT_COLOR}'>🌍 Watchlist</h2>", unsafe_allow_html=True)
+    suchbegriff = st.text_input("Suchen (z.B. AAPL, SAP, Alibaba)", "")
+    
+    if suchbegriff:
+        ergebnisse = suche_weltweit(suchbegriff)
+        if not ergebnisse.empty:
+            auswahl = st.selectbox("Ergebnisse:", ergebnisse["Ticker"].tolist(), format_func=lambda x: f"{ergebnisse[ergebnisse['Ticker']==x]['Name'].values[0]} ({x})")
+            ausgewaehlter_ticker = auswahl
+        else:
+st.info("Nichts gefunden.")
+            ausgewaehlter_ticker = None
     else:
-        with st.spinner("Analysiere..."):
-            ergebnisse = []
-            for t in ticker_liste:
-                d = lade_und_bereche_indikatoren(t)
-                if "fehler" in d:
-                    st.error(d["fehler"])
-                    continue
-                ergebnisse.append(berechne_gewichtet_score(d))
-            
-            if ergebnisse:
-                # 1. Die Übersichtstabelle
-                df = pd.DataFrame([{k:v for k,v in e.items() if k != "Historie"} for e in ergebnisse])
-                df = df.sort_values("Wahrscheinlichkeit (%)", ascending=False)
-                st.dataframe(df, use_container_width=True, hide_index=True)
-                
-                st.divider()
-                st.subheader("📊 Technische Charts")
+        standard = {"AAPL": "Apple (US)", "MSFT": "Microsoft (US)", "NVDA": "NVIDIA (US)", "SAP.DE": "SAP (DE)", "BABA": "Alibaba (CN)"}
+        auswahl = st.selectbox("Beliebte Aktien:", list(standard.keys()), format_func=lambda x: standard[x])
+        ausgewaehlter_ticker = auswahl
 
-                # 2. Die interaktiven Plotly Charts
-                for e in ergebnisse:
-                    with st.expander(f"{e['Ticker']} – Chart anzeigen ({e['Richtung']} | {e['Wahrscheinlichkeit (%)']}%)"):
-                        daten = e["Historie"]
-                        
-                        # Gleitende Durchschnitte berechnen (SMA 20 und 50)
-                        daten["SMA_20"] = daten["Close"].rolling(window=20).mean()
-                        daten["SMA_50"] = daten["Close"].rolling(window=50).mean()
-                        
-                        # Plotly Candlestick Chart erstellen
-                        fig = go.Figure()
-                        
-                        # Kerzen
-                        fig.add_trace(go.Candlestick(
-                            x=daten.index,
-                            open=daten["Open"], high=daten["High"],
-                            low=daten["Low"], close=daten["Close"],
-                            name="Kerzen"
-                        ))
-                        
-                        # Gleitende Durchschnitte als Linien hinzufügen
-                        fig.add_trace(go.Scatter(x=daten.index, y=daten["SMA_20"], name="SMA 20", line=dict(color='orange')))
-                        fig.add_trace(go.Scatter(x=daten.index, y=daten["SMA_50"], name="SMA 50", line=dict(color='blue')))
-                        
-                        # Layout anpassen (Rangeslider aus, damit es auf dem Handy besser aussieht)
-                        fig.update_layout(
-                            title=f"{e['Ticker']} Kerzenchart",
-                            xaxis_rangeslider_visible=False,
-                            height=450,
-                            margin=dict(l=20, r=20, t=40, b=20)
-                        )
-                        
-                        # Chart in Streamlit anzeigen
-                        st.plotly_chart(fig, use_container_width=True)
-                        
-                        # Zusatzinfo: Aktuelle Werte als Kacheln
-                        col1, col2, col3 = st.columns(3)
-                        col1.metric("Aktueller Kurs", f"${e['Historie']['Close'].iloc[-1]:.2f}")
-                        col2.metric("RSI (14)", f"{e['Technik']:.2f}")
-                        col3.metric("Sentiment (5T)", f"{e['Sentiment']:.2f}")
+# Haupt-Chart-Bereich
+if ausgewaehlter_ticker:
+    data = lade_daten(ausgewaehlter_ticker)
+    
+    if "fehler" in data:
+        st.error(data["fehler"])
+    else:
+        df = data["historie"]
+        
+        # --- KOPFBEREICH (TradingView Toolbar) ---
+        aktueller_kurs = df["Close"].iloc[-1]
+        vorheriger_kurs = df["Close"].iloc[-2]
+        kurs_aenderung = aktueller_kurs - vorheriger_kurs
+        prozent_aenderung = (kurs_aenderung / vorheriger_kurs) * 100
+        
+        farbe = UP_COLOR if kurs_aenderung >= 0 else DOWN_COLOR
+        pfeil = "▲" if kurs_aenderung >= 0 else "▼"
+        
+        waehrung = "€" if ".DE" in ausgewaehlter_ticker else ("¥" if (".SS" in ausgewaehlter_ticker or ".SZ" in ausgewaehlter_ticker) else "$")
+
+        st.markdown(f"""
+            <div style="display: flex; align-items: baseline; gap: 15px; font-family: 'Roboto', sans-serif;">
+                <h2 style="margin: 0; color: {TEXT_COLOR};">{ausgewaehlter_ticker}</h2>
+                <h1 style="margin: 0; color: {farbe}; font-size: 2.5rem;">{waehrung}{aktueller_kurs:,.2f}</h1>
+                <h3 style="margin: 0; color: {farbe};">{pfeil} {kurs_aenderung:,.2f} ({prozent_aenderung:.2f}%)</h3>
+            </div>
+        """, unsafe_allow_html=True)
+
+        # --- CHART BAUEN ---
+        fig = make_subplots(rows=3, cols=1, shared_xaxes=True, 
+                            vertical_spacing=0.03, 
+                            row_heights=[0.65, 0.15, 0.20])
+
+        fig.add_trace(go.Candlestick(
+            x=df.index, open=df["Open"], high=df["High"],
+            low=df["Low"], close=df["Close"], name="Preis",
+            increasing_line_color=UP_COLOR, decreasing_line_color=DOWN_COLOR
+        ), row=1, col=1)
+
+        fig.add_trace(go.Scatter(x=df.index, y=df["SMA_20"], name="SMA 20", line=dict(color=SMA20_COLOR, width=1.5)), row=1, col=1)
+        fig.add_trace(go.Scatter(x=df.index, y=df["SMA_50"], name="SMA 50", line=dict(color=SMA50_COLOR, width=1.5)), row=1, col=1)
+        fig.add_trace(go.Scatter(x=df.index, y=df["SMA_200"], name="SMA 200", line=dict(color=SMA200_COLOR, width=1.5)), row=1, col=1)
+
+        colors = [UP_COLOR if close >= open else DOWN_COLOR for close, open in zip(df['Close'], df['Open'])]
+        fig.add_trace(go.Bar(x=df.index, y=df["Volume"], marker_color=colors, name="Volumen"), row=2, col=1)
+
+        fig.add_trace(go.Scatter(x=df.index, y=df["RSI_14"], name="RSI", line=dict(color='#b2b5be', width=1.5)), row=3, col=1)
+        fig.add_hline(y=70, line_dash="dash", line_color=DOWN_COLOR, row=3, col=1)
+        fig.add_hline(y=30, line_dash="dash", line_color=UP_COLOR, row=3, col=1)
+
+        fig.update_layout(
+            template="plotly_dark",
+            paper_bgcolor=BG_COLOR,
+            plot_bgcolor=BG_COLOR,
+            xaxis_rangeslider_visible=False,
+            height=800,
+            margin=dict(l=10, r=10, t=10, b=10),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0, font=dict(color=TEXT_COLOR)),
+            hovermode="x unified"
+        )
+
+        fig.update_xaxes(showgrid=True, gridcolor=GRID_COLOR, gridwidth=1, zeroline=False)
+        fig.update_yaxes(showgrid=True, gridcolor=GRID_COLOR, gridwidth=1, zeroline=False)
+        fig.update_yaxes(title_text="", side="right", row=1, col=1)
+        fig.update_yaxes(title_text="", side="right", row=2, col=1)
+        fig.update_yaxes(title_text="RSI", side="right", row=3, col=1)
+
+        st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
