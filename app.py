@@ -12,14 +12,14 @@ RISIKO_SCHWELLE = 0.02
 GEWICHTE = {"Technik": 0.45, "Sentiment": 0.25, "Risiko": 0.30}
 
 # TradingView Farbpalette
-BG_COLOR = "#131722"      # Sehr dunkles Blau/Grau
-GRID_COLOR = "#2a2e39"    # Etwas helleres Grau für das Raster
-TEXT_COLOR = "#d1d4dc"    # Helles Grau für Text
-UP_COLOR = "#089981"      # TradingView Grün
-DOWN_COLOR = "#f23645"    # TradingView Rot
-SMA20_COLOR = "#f5c142"   # Gelb/Orange
-SMA50_COLOR = "#2962ff"   # Blau
-SMA200_COLOR = "#e91e63"  # Pink
+BG_COLOR = "#131722"      
+GRID_COLOR = "#2a2e39"    
+TEXT_COLOR = "#d1d4dc"    
+UP_COLOR = "#089981"      
+DOWN_COLOR = "#f23645"    
+SMA20_COLOR = "#f5c142"   
+SMA50_COLOR = "#2962ff"   
+SMA200_COLOR = "#e91e63"  
 
 st.set_page_config(page_title="TV Clone", page_icon="📈", layout="wide")
 
@@ -48,7 +48,8 @@ def suche_weltweit(query_text: str):
         if not quotes: return pd.DataFrame()
         results = [{"Ticker": q.get("symbol"), "Name": q.get("shortname", q.get("longname", "Unbekannt"))} for q in quotes if q.get("quoteType") == "EQUITY"]
         return pd.DataFrame(results)
-    except Exception: return pd.DataFrame()
+    except Exception: 
+        return pd.DataFrame()
 
 # --- DATEN LADEN ---
 @st.cache_data(ttl=300)
