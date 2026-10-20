@@ -8,10 +8,6 @@ from plotly.subplots import make_subplots
 from yfinance import Search
 
 # --- KONFIGURATION & TRADINGVIEW-FARBEN ---
-RISIKO_SCHWELLE = 0.02
-GEWICHTE = {"Technik": 0.45, "Sentiment": 0.25, "Risiko": 0.30}
-
-# TradingView Farbpalette
 BG_COLOR = "#131722"      
 GRID_COLOR = "#2a2e39"    
 TEXT_COLOR = "#d1d4dc"    
@@ -23,7 +19,6 @@ SMA200_COLOR = "#e91e63"
 
 st.set_page_config(page_title="TV Clone", page_icon="📈", layout="wide")
 
-# Custom CSS für den absoluten TradingView-Look
 st.markdown(f"""
     <style>
     .stApp {{ background-color: {BG_COLOR}; color: {TEXT_COLOR}; }}
@@ -38,25 +33,26 @@ st.markdown(f"""
     </style>
 """, unsafe_allow_html=True)
 
-# --- SUCHE ---
 @st.cache_data(ttl=3600)
 def suche_weltweit(query_text: str):
-    if not query_text or len(query_text) < 2: return pd.DataFrame()
+    if not query_text or len(query_text) < 2: 
+        return pd.DataFrame()
     try:
         search = Search(query_text, max_results=10)
         quotes = search.quotes
-        if not quotes: return pd.DataFrame()
+        if not quotes: 
+            return pd.DataFrame()
         results = [{"Ticker": q.get("symbol"), "Name": q.get("shortname", q.get("longname", "Unbekannt"))} for q in quotes if q.get("quoteType") == "EQUITY"]
         return pd.DataFrame(results)
     except Exception: 
         return pd.DataFrame()
 
-# --- DATEN LADEN ---
 @st.cache_data(ttl=300)
 def lade_daten(ticker_symbol: str):
     try:
         daten = yf.Ticker(ticker_symbol).history(period="1y")
-        if daten.empty: return {"fehler": "Keine Daten."}
+        if daten.empty: 
+            return {"fehler": "Keine Daten."}
         
         daten.ta.rsi(length=14, append=True)
         daten["SMA_20"] = daten["Close"].rolling(window=20).mean()
@@ -67,7 +63,6 @@ def lade_daten(ticker_symbol: str):
     except Exception as e:
         return {"fehler": str(e)}
 
-# --- UI ---
 with st.sidebar:
     st.markdown(f"<h2 style='color:{TEXT_COLOR}'>🌍 Watchlist</h2>", unsafe_allow_html=True)
     suchbegriff = st.text_input("Suchen (z.B. AAPL, SAP, Alibaba)", "")
@@ -85,7 +80,6 @@ st.info("Nichts gefunden.")
         auswahl = st.selectbox("Beliebte Aktien:", list(standard.keys()), format_func=lambda x: standard[x])
         ausgewaehlter_ticker = auswahl
 
-# Haupt-Chart-Bereich
 if ausgewaehlter_ticker:
     data = lade_daten(ausgewaehlter_ticker)
     
@@ -94,7 +88,6 @@ if ausgewaehlter_ticker:
     else:
         df = data["historie"]
         
-        # --- KOPFBEREICH (TradingView Toolbar) ---
         aktueller_kurs = df["Close"].iloc[-1]
         vorheriger_kurs = df["Close"].iloc[-2]
         kurs_aenderung = aktueller_kurs - vorheriger_kurs
@@ -113,7 +106,6 @@ if ausgewaehlter_ticker:
             </div>
         """, unsafe_allow_html=True)
 
-        # --- CHART BAUEN ---
         fig = make_subplots(rows=3, cols=1, shared_xaxes=True, 
                             vertical_spacing=0.03, 
                             row_heights=[0.65, 0.15, 0.20])
